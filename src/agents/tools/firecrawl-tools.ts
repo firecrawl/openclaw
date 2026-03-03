@@ -43,7 +43,8 @@ function resolveSearchEndpoint(baseUrl: string): string {
   const base = trimmed || "https://api.firecrawl.dev";
   try {
     const url = new URL(base);
-    url.pathname = "/v2/search";
+    // Append /v2/search to existing path to preserve reverse-proxy prefixes
+    url.pathname = url.pathname.replace(/\/$/, "") + "/v2/search";
     return url.toString();
   } catch {
     return "https://api.firecrawl.dev/v2/search";

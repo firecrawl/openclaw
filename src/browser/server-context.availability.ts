@@ -154,7 +154,17 @@ export function createProfileAvailability({
           };
           return; // existing session still alive
         }
+        // Best-effort cleanup of the unreachable session to avoid leaking cloud resources
+        const staleSession = profileState.firecrawlSession;
         profileState.firecrawlSession = null;
+        const cleanupKey = getFirecrawlApiKey(opts);
+        if (cleanupKey && staleSession) {
+          deleteFirecrawlBrowserSession({
+            apiKey: cleanupKey,
+            baseUrl: opts.firecrawlBaseUrl || "https://api.firecrawl.dev",
+            sessionId: staleSession.sessionId,
+          }).catch(() => {});
+        }
       }
       const apiKey = getFirecrawlApiKey(opts);
       const baseUrl = opts.firecrawlBaseUrl || "https://api.firecrawl.dev";

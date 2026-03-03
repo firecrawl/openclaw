@@ -96,7 +96,13 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       params.color && HEX_COLOR_RE.test(params.color) ? params.color : allocateColor(usedColors);
 
     let profileConfig: BrowserProfileConfig;
-    if (rawCdpUrl) {
+    if (driver === "firecrawl") {
+      // Firecrawl profiles use cloud sessions, no local CDP port needed
+      profileConfig = {
+        driver: "firecrawl",
+        color: profileColor,
+      };
+    } else if (rawCdpUrl) {
       const parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
       profileConfig = {
         cdpUrl: parsed.normalized,

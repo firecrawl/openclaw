@@ -57,6 +57,7 @@ export async function createFirecrawlBrowserSession(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {
@@ -99,6 +100,7 @@ export async function deleteFirecrawlBrowserSession(
     headers: {
       Authorization: `Bearer ${apiKey}`,
     },
+    signal: AbortSignal.timeout(10_000),
   });
 
   if (!res.ok) {
