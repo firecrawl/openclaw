@@ -68,6 +68,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       detectError = String(err);
     }
 
+    const firecrawlSession = profileState?.firecrawlSession;
     res.json({
       enabled: current.resolved.enabled,
       profile: profileCtx.profile.name,
@@ -76,7 +77,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       cdpHttp,
       pid: profileState?.running?.pid ?? null,
       cdpPort: profileCtx.profile.cdpPort,
-      cdpUrl: profileCtx.profile.cdpUrl,
+      cdpUrl: profileCtx.getCdpUrl(),
       chosenBrowser: profileState?.running?.exe.kind ?? null,
       detectedBrowser,
       detectedExecutablePath,
@@ -87,6 +88,13 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       noSandbox: current.resolved.noSandbox,
       executablePath: current.resolved.executablePath ?? null,
       attachOnly: profileCtx.profile.attachOnly,
+      ...(firecrawlSession
+        ? {
+            liveViewUrl: firecrawlSession.liveViewUrl,
+            interactiveLiveViewUrl: firecrawlSession.interactiveLiveViewUrl,
+            firecrawlSessionId: firecrawlSession.sessionId,
+          }
+        : {}),
     });
   });
 
@@ -141,6 +149,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver) as
       | "openclaw"
       | "extension"
+      | "firecrawl"
       | "";
 
     if (!name) {
@@ -153,7 +162,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         name,
         color: color || undefined,
         cdpUrl: cdpUrl || undefined,
-        driver: driver === "extension" ? "extension" : undefined,
+        driver: driver === "extension" || driver === "firecrawl" ? driver : undefined,
       });
       res.json(result);
     } catch (err) {

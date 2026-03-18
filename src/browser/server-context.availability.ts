@@ -1,3 +1,4 @@
+import { loadConfig } from "../config/config.js";
 import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
@@ -15,6 +16,11 @@ import {
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
 import {
+  createFirecrawlBrowserSession,
+  deleteFirecrawlBrowserSession,
+  isFirecrawlSessionReachable,
+} from "./firecrawl-browser.js";
+import {
   CDP_READY_AFTER_LAUNCH_MAX_TIMEOUT_MS,
   CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
   CDP_READY_AFTER_LAUNCH_POLL_MS,
@@ -25,6 +31,23 @@ import type {
   ContextOptions,
   ProfileRuntimeState,
 } from "./server-context.types.js";
+
+/** Re-resolve firecrawl API key from current config + env, falling back to the captured opts value. */
+function getFirecrawlApiKey(opts: ContextOptions): string | undefined {
+  const cfg = loadConfig();
+  const fetch = cfg.tools?.web?.fetch;
+  const firecrawl =
+    fetch && typeof fetch === "object" && "firecrawl" in fetch ? fetch.firecrawl : undefined;
+  const fromConfig =
+    firecrawl &&
+    typeof firecrawl === "object" &&
+    "apiKey" in firecrawl &&
+    typeof firecrawl.apiKey === "string"
+      ? firecrawl.apiKey.trim()
+      : "";
+  const fromEnv = (process.env.FIRECRAWL_API_KEY || "").trim();
+  return fromConfig || fromEnv || opts.firecrawlApiKey;
+}
 
 type AvailabilityDeps = {
   opts: ContextOptions;
@@ -57,11 +80,23 @@ export function createProfileAvailability({
     });
 
   const isReachable = async (timeoutMs?: number) => {
+    if (profile.driver === "firecrawl") {
+      const session = getProfileState().firecrawlSession;
+      return session
+        ? await isFirecrawlSessionReachable(session.cdpWebSocketUrl, timeoutMs)
+        : false;
+    }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeCdpReady(profile.cdpUrl, httpTimeoutMs, wsTimeoutMs);
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
+    if (profile.driver === "firecrawl") {
+      const session = getProfileState().firecrawlSession;
+      return session
+        ? await isFirecrawlSessionReachable(session.cdpWebSocketUrl, timeoutMs)
+        : false;
+    }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs);
   };
@@ -107,6 +142,44 @@ export function createProfileAvailability({
     const attachOnly = profile.attachOnly;
     const isExtension = profile.driver === "extension";
     const profileState = getProfileState();
+
+    // Firecrawl cloud browser: manage session lifecycle
+    if (profile.driver === "firecrawl") {
+      if (profileState.firecrawlSession) {
+        if (await isFirecrawlSessionReachable(profileState.firecrawlSession.cdpWebSocketUrl)) {
+          // Re-apply dynamic cdpUrl in case config refresh overwrote it
+          profileState.profile = {
+            ...profileState.profile,
+            cdpUrl: profileState.firecrawlSession.cdpWebSocketUrl,
+          };
+          return; // existing session still alive
+        }
+        // Best-effort cleanup of the unreachable session to avoid leaking cloud resources
+        const staleSession = profileState.firecrawlSession;
+        profileState.firecrawlSession = null;
+        const cleanupKey = getFirecrawlApiKey(opts);
+        if (cleanupKey && staleSession) {
+          deleteFirecrawlBrowserSession({
+            apiKey: cleanupKey,
+            baseUrl: opts.firecrawlBaseUrl || "https://api.firecrawl.dev",
+            sessionId: staleSession.sessionId,
+          }).catch(() => {});
+        }
+      }
+      const apiKey = getFirecrawlApiKey(opts);
+      const baseUrl = opts.firecrawlBaseUrl || "https://api.firecrawl.dev";
+      if (!apiKey) {
+        throw new Error(
+          "Firecrawl browser profile requires an API key. Set tools.web.fetch.firecrawl.apiKey or FIRECRAWL_API_KEY.",
+        );
+      }
+      const session = await createFirecrawlBrowserSession({ apiKey, baseUrl });
+      profileState.firecrawlSession = session;
+      // Update the runtime profile with the session's CDP WebSocket URL
+      profileState.profile = { ...profileState.profile, cdpUrl: session.cdpWebSocketUrl };
+      return;
+    }
+
     const httpReachable = await isHttpReachable();
 
     if (isExtension && remoteCdp) {
@@ -198,6 +271,23 @@ export function createProfileAvailability({
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
+    if (profile.driver === "firecrawl") {
+      const profileState = getProfileState();
+      const session = profileState.firecrawlSession;
+      if (session) {
+        const apiKey = getFirecrawlApiKey(opts);
+        const baseUrl = opts.firecrawlBaseUrl || "https://api.firecrawl.dev";
+        if (apiKey) {
+          await deleteFirecrawlBrowserSession({
+            apiKey,
+            baseUrl,
+            sessionId: session.sessionId,
+          }).catch(() => {}); // best-effort cleanup
+        }
+        profileState.firecrawlSession = null;
+      }
+      return { stopped: Boolean(session) };
+    }
     if (profile.driver === "extension") {
       const stopped = await stopChromeExtensionRelayServer({
         cdpUrl: profile.cdpUrl,
